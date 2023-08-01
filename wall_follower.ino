@@ -112,23 +112,23 @@ String watchsurrounding(){
  *   for example B101000 last 5 digits is 01000, which stands for Left front has obstacle, B100111 means front, right front and right ha
  */
  
-int obstacle_status =B100000;
+int obstacle_status =0b00000;
   centerscanval = watch();
   if(centerscanval<distancelimit){
-    obstacle_status  =obstacle_status | B100;
+    obstacle_status  =obstacle_status | 0b100;
     }
   head.write(120);
   delay(100);
   ldiagonalscanval = watch();
   if(ldiagonalscanval<distancelimit){
-     obstacle_status  =obstacle_status | B1000;
+     obstacle_status  =obstacle_status | 0b1000;
     }
   head.write(180); 
   delay(300);
   leftscanval = watch();
   if(leftscanval<sidedistancelimit)
   {
-     obstacle_status  =obstacle_status | B10000;
+     obstacle_status  =obstacle_status | 0b10000;
     if (wallLocation == NOT_FOUND)
     {
       wallLocation = RIGHT;
@@ -139,13 +139,13 @@ int obstacle_status =B100000;
   delay(100);
   centerscanval = watch();
   if(centerscanval<distancelimit){
-    obstacle_status  =obstacle_status | B100;
+    obstacle_status  =obstacle_status | 0b100;
     }
   head.write(40);
   delay(100);
   rdiagonalscanval = watch();
   if(rdiagonalscanval<distancelimit){
-    obstacle_status  =obstacle_status | B10;
+    obstacle_status  =obstacle_status | 0b10;
     }
   head.write(0);
   delay(100);
@@ -171,7 +171,7 @@ void auto_avoidance(){
   ++numcycles;
   if(numcycles>=LPT){ //Watch if something is around every LPT loops while moving forward 
      stop_Stop();
-    String obstacle_sign=watchsurrounding(); // 5 digits of obstacle_sign binary value means the 5 direction obstacle status
+    Int obstacle_sign=watchsurrounding(); // 5 digits of obstacle_sign binary value means the 5 direction obstacle status
       Serial.print("begin str=");
       Serial.println(obstacle_sign);
     
