@@ -17,6 +17,23 @@
 #define LeftDirectPin2  8   ///Left Motor direction pin 1 to MODEL-X IN4
 #define LPT 2 // scan loop coumter
 
+enum direction
+{
+  NONE=0,
+  RIGHT,
+  LEFT
+};
+direction wallDirection = NONE;
+
+struct robot
+{
+  bool turn_left;
+  bool turn_right;
+  bool hard_turn; 
+};
+
+robot robot;
+
 #define SERVO_PIN     9  //servo connect to D9
 
 #define Echo_PIN    2   // Ultrasonic Echo pin connect to D11
@@ -28,17 +45,16 @@
 #define TURN_SPEED  200     //both sides of the motor speed
 #define BACK_SPEED1  255     //back speed
 #define BACK_SPEED2  90     //back speed
-
-enum wall {
-  LEFT,
-  RIGHT,
-  NOT_FOUND
-};
-wall wallLocation = NOT_FOUND;
+#define bRIGHT 0b00001
+#define bRIGHT_D 0b00010
+#define bFORWARD 0b00100
+#define bLEFT_D 0b01000
+#define bLEFT 0b10000
 
 int leftscanval, centerscanval, rightscanval, ldiagonalscanval, rdiagonalscanval;
 const int distancelimit = 30; //distance limit for obstacles in front           
 const int sidedistancelimit = 30; //minimum distance in cm to obstacles at both sides (the car will allow a shorter distance sideways)
+const int wallLimit = 35;
 int distance;
 int numcycles = 0;
 const int turntime = 250; //Time the robot spends turning (miliseconds)
@@ -62,9 +78,32 @@ void set_Motorspeeds(int speed_L,int speed_R)
   analogWrite(speedPinR,abs(speed_R));
 }
 
-go_Forward(int speed)
+void go_Forward(int speed)
 {
-  set_Motorspeed(speed, speed);
+  set_Motorspeeds(speed, speed);
+}
+
+void spin(int direction, int speed)
+{
+  if(direction==LEFT) set_Motorspeeds(-1*speed, speed);
+
+  else if (direction==RIGHT) set_Motorspeeds(speed, -1*speed);
+  
+  else set_Motorspeeds(speed, speed);
+}
+
+turn(int direction)
+{
+  if(direction == LEFT) set Motorspeeds(FAST_SPEED, SPEED);
+  else set_Motorspeeds(SPEED, FAST_SPEED);
+ 
+}
+
+reverse(int direction)
+{
+  if( direction == RIGHT ) set_Motorspeeds(SPEED, -1*FAST_SPEED);
+  if(direction == LEFT ) set_Motorspeeds(-1*FAST_SPEED, SPEED);
+  if(direction == NONE) set_Motorspeeds(-1*SPEED, -1*SPEED);
 }
 
 void buzz_ON()   //open buzzer
@@ -107,165 +146,163 @@ int watch(){
 
 //Meassures distances to the right, left, front, left diagonal, right diagonal and asign them in cm to the variables rightscanval, 
 //leftscanval, centerscanval, ldiagonalscanval and rdiagonalscanval (there are 5 points for distance testing)
-String watchsurrounding(){
+void watchSurroundings(){
 /*  obstacle_status is a binary integer, its last 5 digits stands for if there is any obstacles in 5 directions,
  *   for example B101000 last 5 digits is 01000, which stands for Left front has obstacle, B100111 means front, right front and right ha
  */
  
 int obstacle_status =0b00000;
   centerscanval = watch();
-  if(centerscanval<distancelimit){
-    obstacle_status  =obstacle_status | 0b100;
+  if(centerscanval < distancelimit){
+      robot.hard_turn = true;
     }
   head.write(120);
   delay(100);
   ldiagonalscanval = watch();
   if(ldiagonalscanval<distancelimit){
-     obstacle_status  =obstacle_status | 0b1000;
+     robot.turn_right = true;
+     robot.hard_turn = true;
+     if(wallDirection == NOT_FOUND)
+    {
+      wallDirection = LEFT;
+    }
     }
   head.write(180); 
   delay(300);
   leftscanval = watch();
   if(leftscanval<sidedistancelimit)
   {
-     obstacle_status  =obstacle_status | 0b10000;
-    if (wallLocation == NOT_FOUND)
+    robot.turn_right = true;
+    if(wallDirection == NOT_FOUND)
     {
-      wallLocation = RIGHT;
+      wallDirection = LEFT;
     }
   }
 
   head.write(90); //use 90 degrees if you are moving your servo through the whole 180 degrees
   delay(100);
   centerscanval = watch();
-  if(centerscanval<distancelimit){
-    obstacle_status  =obstacle_status | 0b100;
-    }
+  if(centerscanval<distancelimit)
+  {
+    robot.hard_turn = true;
+  }
   head.write(40);
   delay(100);
   rdiagonalscanval = watch();
-  if(rdiagonalscanval<distancelimit){
-    obstacle_status  =obstacle_status | 0b10;
-    }
+  if(rdiagonalscanval<distancelimit)
+  {
+    robot.turn_left = true;
+    robot.hard_turn = true; 
+    if(wallDirection == NOT_FOUND)
+    {
+      wallDirection = RIGHT;
+    } 
+  }
   head.write(0);
   delay(100);
   rightscanval = watch();
-  if(rightscanval<sidedistancelimit){
-    obstacle_status  =obstacle_status | 1;
-    if (wallLocation == NOT_FOUND)
+  if(rightscanval<sidedistancelimit)
+  {
+    robot.turn_left;
+    if(wallDirection == NOT_FOUND)
     {
-      wallLocation = RIGHT;
+      wallDirection = RIGHT;
     }
+
   }
   head.write(90); //Finish looking around (look forward again)
-  delay(300);
-  String obstacle_str= String(obstacle_status,BIN);
-  obstacle_str= obstacle_str.substring(1,6);
-  
-  return obstacle_str; //return 5-character string standing for 5 direction obstacle status
+  delay(100);
 }
 
 
-void auto_avoidance(){
-
-  ++numcycles;
-  if(numcycles>=LPT){ //Watch if something is around every LPT loops while moving forward 
-     stop_Stop();
-    Int obstacle_sign=watchsurrounding(); // 5 digits of obstacle_sign binary value means the 5 direction obstacle status
-      Serial.print("begin str=");
-      Serial.println(obstacle_sign);
+void followWall()
+{
+  if (wallLimit && (wallDirection == NONE))
+  {
+    //* go forward
+  }
+  else if (wallDirection == LEFT && leftscanval > wallLimit*3)
+  {
+    //spin left
+    spin(LEFT, TURN_SPEED);
+  }
+  else if (wallDirection == LEFT && leftscanval > wallLimit)
+  {
+    //turn left
+  }
+  else if (wallDirection == LEFT && leftscanval < wallLimit)
+  {
+    //turn right
     
-    if( obstacle_sign=="10000"){
-      Serial.println("wall left");
-      set_Motorspeed(SPEED, SPEED);
-      all_Advance();
-      delay(turntime);
-      stop_Stop();
+  }
+  else if (wallDirection == RIGHT && rightscanval > wallLimit*3)
+  {
+    //spin right
+    spin(RIGHT, TURN_SPEED);
+  }
+  else if (wallDirection == RIGHT && rightscanval > wallLimit)
+  {
+    //turn right
+  }
+  else if (wallDirection == RIGHT && rightscanval < wallLimit)
+  {
+    //turn left
+  }
+  
+}
+
+void auto_navigation(){
+
+    watchSurroundings();
+    if (robot.turn_left && robot.turn_right && robot.hard_turn && (leftscanval << distancelimit || rdiagonalscanval < distancelimit))
+    {
+      //backup right
     }
-    else if( obstacle_sign=="00001"  ){
-      Serial.println("wall right");
-      set_Motorspeed(SPEED, SPEED);
-      go_Advance();
-      delay(turntime);
-      stop_Stop();
+    else if (robot.turn_left && robot.turn_right && robot.hard_turn)
+    {
+      //backup left;
     }
-    else if( obstacle_sign=="11100" || obstacle_sign=="01000" || obstacle_sign=="11000"  || obstacle_sign=="10100"  || obstacle_sign=="01100" ||obstacle_sign=="00100"  ||obstacle_sign=="01000" ){
-     Serial.println("turn right");
-	    go_Right();
-      set_Motorspeed(TURN_SPEED,TURN_SPEED);
-      delay(turntime);
-      stop_Stop();
+    if (robot.turn_right && robot.hard_turn)
+    {
+      //spin right
+      spin(RIGHT, TURN_SPEED);
+    }
+    else if (robot.hard_turn)
+    {
+      // spin left
+      spin(LEFT, TURN_SPEED);
+    }
+    else if (robot.turn_left)
+    {
+      // turn left
+      
+    }
+    else if (robot.turn_right)
+    {
+      //turn right
+    }
+    else
+    {
+      //follow wall
+      followWall();
     } 
-    else if( obstacle_sign=="00010" || obstacle_sign=="00111" || obstacle_sign=="00011"  || obstacle_sign=="00101" || obstacle_sign=="00110" || obstacle_sign=="01010" ){
-    Serial.println("turn left");
-     go_Left();//Turn left
-     set_Motorspeed(TURN_SPEED,TURN_SPEED);
-      delay(turntime);
-      stop_Stop();
-    }
-
-    else if(  obstacle_sign=="01111" ||  obstacle_sign=="10111" || obstacle_sign=="11111"  ){
-    Serial.println("hand back right");
-	  go_Left();
-		set_Motorspeed( FAST_SPEED,SPEED);
-       delay(backtime);
-          stop_Stop();
-        } 
-    else if( obstacle_sign=="11011"  ||    obstacle_sign=="11101"  ||  obstacle_sign=="11110"  || obstacle_sign=="01110"  ){
-    Serial.println("hand back left");
-    go_Right();
-    set_Motorspeed( SPEED,FAST_SPEED);
-       delay(backtime);
-          stop_Stop();
-    }    
-    else if ( obstacle_sign = "00000" && wallLocation == NOT_FOUND) 
-    { 
-     set_Motorspeed(SPEED,SPEED);
-     go_Advance();  // if nothing is wrong go forward using go() function above.
-        delay(backtime);
-          stop_Stop();
-    }
-    else if ( wallLocation == LEFT && leftscanval > distancelimit) 
-    {  
-     Serial.println("turn left");
-     go_Left();//Turn left
-     set_Motorspeed(TURN_SPEED,TURN_SPEED);
-      delay(turntime);
-      stop_Stop();
-    }
-
-    else if ( wallLocation == RIGHT && rightscanval > distancelimit) 
-    { 
-      Serial.println("turn right");
-	    go_Right();
-      set_Motorspeed(TURN_SPEED,TURN_SPEED);
-      delay(turntime);
-      stop_Stop();
-    }
-    else Serial.println("no handle");
-      numcycles=0; //Restart count of cycles
-  }
-  else {
-      go_Forward(SPEED);  // if nothing is wrong go forward using go() function above.
-      delay(backtime);
-      stop_Stop();
-  }
+    
   //else  Serial.println(numcycles);
   
-  distance = watch(); // use the watch() function to see if anything is ahead (when the robot is just moving forward and not looking around it will test the distance in front)
-  if (distance<distancelimit){ // The robot will just stop if it is completely sure there's an obstacle ahead (must test 25 times) (needed to ignore ultrasonic sensor's false signals)
- Serial.println("final go back");
-    go_Right();
-    set_Motorspeed( SPEED,FAST_SPEED);
-  delay(backtime*3/2);
-      ++thereis;}
-  if (distance>distancelimit){
-      thereis=0;} //Count is restarted
-  if (thereis > 25){
-  Serial.println("final stop");
-    stop_Stop(); // Since something is ahead, stop moving.
-    thereis=0;
-  }
+//   distance = watch(); // use the watch() function to see if anything is ahead (when the robot is just moving forward and not looking around it will test the distance in front)
+//   if (distance<distancelimit){ // The robot will just stop if it is completely sure there's an obstacle ahead (must test 25 times) (needed to ignore ultrasonic sensor's false signals)
+//  Serial.println("final go back");
+//     go_Right();
+//     set_Motorspeed( SPEED,FAST_SPEED);
+//   delay(backtime*3/2);
+//       ++thereis;}
+//   if (distance>distancelimit){
+//       thereis=0;} //Count is restarted
+//   if (thereis > 25){
+//   Serial.println("final stop");
+//     stop_Stop(); // Since something is ahead, stop moving.
+//     thereis=0;
+  // }
 }
 
 void setup() {
