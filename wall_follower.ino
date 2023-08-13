@@ -17,13 +17,25 @@
 #define LeftDirectPin2  8   ///Left Motor direction pin 1 to MODEL-X IN4
 #define LPT 2 // scan loop coumter
 
+typedef enum scanAngle
+{
+  rightScan = 0,
+  rightDiagonalScan,
+  centerScan,
+  leftDiagonalScan,
+  leftScan
+} scanAngle;
+
+int scanValues[5];
+
 enum direction
 {
-  NONE=0,
-  RIGHT,
-  LEFT
+  RIGHT=0,
+  LEFT=1, 
+  NONE=2
 };
 direction wallDirection = NONE;
+int prevWallDistance = 30;
 
 struct robot
 {
@@ -53,13 +65,14 @@ robot robot;
 #define bLEFT 0b10000
 
 int leftscanval, centerscanval, rightscanval, ldiagonalscanval, rdiagonalscanval;
-const int distancelimit = 30; //distance limit for obstacles in front           
-const int sidedistancelimit = 30; //minimum distance in cm to obstacles at both sides (the car will allow a shorter distance sideways)
-const int wallLimit = 35;
+const int distancelimit = 20; //distance limit for obstacles in front           
+const int sidedistancelimit = 20; //minimum distance in cm to obstacles at both sides (the car will allow a shorter distance sideways)
+const int wallLimit = 25;
 int distance;
 int numcycles = 0;
 const int turntime = 250; //Time the robot spends turning (miliseconds)
 const int backtime = 300; //Time the robot spends moving (miliseconds)
+const int followingLoopInterval = 10;
 
 int thereis;
 Servo head;
@@ -91,24 +104,38 @@ void set_Motorspeeds(int speed_L,int speed_R)
   analogWrite(speedPinR,abs(speed_R));
 }
 
-void go_Forward(int speed)
+void go_Forward(int speed, int duration)
 {
+  int startTime = millis();
   set_Motorspeeds(speed, speed);
+  head.write(90);
+  while(millis() - startTime < duration)
+  {
+    if(watch()<=distancelimit)
+    {
+      stop();
+      break;
+    }
+  }
 }
 
 void spin(int direction, int speed)
 {
-  if(direction==LEFT) set_Motorspeeds(-1*speed, speed);
+  if(direction==LEFT) set_Motorspeeds(-1*speed, speed*0.75);
 
-  else if (direction==RIGHT) set_Motorspeeds(speed, -1*speed);
-  
-  else set_Motorspeeds(speed, speed);
+  else if (direction==RIGHT) set_Motorspeeds(speed * 0.75, -1*speed);
+}
+
+void spin_degrees(int direction, int degrees)
+{
+  spin(direction, 255);
+  delay(degrees*4.3);
 }
 
 void corner(int direction)
 {
-  if (direction == LEFT) set_Motorspeeds(SLOW_SPEED, 200);
-  else if (direction == RIGHT) set_Motorspeeds(200, SLOW_SPEED);
+  if (direction == LEFT) set_Motorspeeds(90, 250);
+  else if (direction == RIGHT) set_Motorspeeds(250, 90);
 }
 
 void cornerBack(int direction)
@@ -135,155 +162,141 @@ void stop()
   set_Motorspeeds(0,0);
 }
 
-void buzz_ON()   //open buzzer
+void printScanValues()
 {
-  
-  for(int i=0;i<100;i++)
-  {
-   digitalWrite(BUZZ_PIN,LOW);
-   delay(2);//wait for 1ms
-   digitalWrite(BUZZ_PIN,HIGH);
-   delay(2);//wait for 1ms
-  }
-}
+  Serial.println("******************************************");
+  Serial.println("Scanvalues");
+  Serial.print("Right scan value: ");
+  Serial.println(scanValues[rightScan]);
+  Serial.print("Right diagonal scan value: ");
+  Serial.println(scanValues[rightDiagonalScan]);
+  Serial.print("Center scan value: ");
+  Serial.println(scanValues[centerScan]);
+  Serial.print("Left diagonal scan value: ");
+  Serial.println(scanValues[leftDiagonalScan]);
+  Serial.print("Left scan value: ");
+  Serial.println(scanValues[leftScan]);
+  Serial.println("******************************************");
 
-void buzz_OFF()  //close buzzer
-{
-  digitalWrite(BUZZ_PIN, HIGH);
-  
-}
-
-void alarm(){
-   buzz_ON();
- 
-   buzz_OFF();
 }
 
 /*detection of ultrasonic distance: total delay of 20 microseconds*/
-int watch(){
-  long echo_distance;
-  digitalWrite(Trig_PIN,LOW);
-  delayMicroseconds(5);                                                                              
-  digitalWrite(Trig_PIN,HIGH);
-  delayMicroseconds(15);
-  digitalWrite(Trig_PIN,LOW);
-  echo_distance=pulseIn(Echo_PIN,HIGH);
-  echo_distance=echo_distance*0.01657; //how far away is the object in cm
-  //Serial.println((int)echo_distance);
-  return round(echo_distance);
+long watch(){
+  long echo_distance = 0;
+  int avg = 0;
+  int count = 4;
+  for(int i = 0; i < count; i++)
+  {
+    digitalWrite(Trig_PIN,LOW);
+    delayMicroseconds(5);                                                                              
+    digitalWrite(Trig_PIN,HIGH);
+    delayMicroseconds(15);
+    digitalWrite(Trig_PIN,LOW);
+    echo_distance=pulseIn(Echo_PIN,HIGH);
+    echo_distance=echo_distance*0.01657; //how far away is the object in cm
+    //Serial.println((int)echo_distance);
+    avg = avg + (echo_distance*0.25);
+  }
+  return round(avg);
+}
+
+void findWall()
+{
+  head.write(180); 
+  delay(300);
+  leftscanval = watch();
+  head.write(0); 
+  delay(100);
+  leftscanval = watch();
+  if(leftscanval<rightscanval)
+  {
+    wallDirection = LEFT;
+  }
+  else wallDirection = RIGHT;
 }
 
 //Meassures distances to the right, left, front, left diagonal, right diagonal and asign them in cm to the variables rightscanval, 
 //leftscanval, centerscanval, ldiagonalscanval and rdiagonalscanval (there are 5 points for distance testing)
-void watchSurroundings(){
-/*  obstacle_status is a binary integer, its last 5 digits stands for if there is any obstacles in 5 directions,
- *   for example B101000 last 5 digits is 01000, which stands for Left front has obstacle, B100111 means front, right front and right ha
- */
-  robot.turn_right = false;
-  robot.turn_left = false;
-  robot.hard_turn = false;
-  centerscanval = watch();
-  if(centerscanval < distancelimit)
+void watchSurroundings()
+{
+  if(wallDirection == RIGHT or wallDirection == NONE)
   {
-    robot.hard_turn = true;
-    Serial.print("Centerscanval: ");
-    Serial.println(centerscanval);
-  }
-  head.write(120);
-  delay(100);
-  ldiagonalscanval = watch();
-  if(ldiagonalscanval<distancelimit){
-     robot.turn_right = true;
-     robot.hard_turn = true;
-     if(wallDirection == NONE)
+    for(int i = 0; i < 5; i++)
     {
-      wallDirection = LEFT;
+      head.write(i*45);
+      delay(300);
+      scanValues[i] = watch();    
     }
-    Serial.print("ldiagonalscanval: ");
-    Serial.println(ldiagonalscanval);
   }
-  head.write(180); 
-  delay(300);
-  leftscanval = watch();
-  if(leftscanval < sidedistancelimit)
+
+  if(wallDirection == LEFT)
+  {
+    for(int i = 4; i >= 0; i--)
+    {
+      head.write(i*45);
+      delay(300);
+      scanValues[i] = watch();    
+    }
+  }
+  head.write(wallDirection * 180);
+  delay(500);
+}
+
+void chooseDirection()
+{
+  robot.turn_left = false;
+  robot.turn_right = false;
+  robot.hard_turn = false;
+
+  if(scanValues[rightScan] < sidedistancelimit || scanValues[rightDiagonalScan] < wallLimit)
+  {
+    robot.turn_left = true;
+  }
+  if(scanValues[leftScan] < sidedistancelimit || scanValues[leftDiagonalScan] < wallLimit)
   {
     robot.turn_right = true;
-    if(wallDirection == NONE)
-    {
-      wallDirection = LEFT;
-    }
-    Serial.print("leftscanval: ");
-    Serial.println(leftscanval);
   }
-
-  head.write(90); //use 90 degrees if you are moving your servo through the whole 180 degrees
-  delay(100);
-  centerscanval = watch();
-  if(centerscanval<distancelimit)
+  if(scanValues[centerScan] < wallLimit || scanValues[leftDiagonalScan] < wallLimit || scanValues[rightDiagonalScan] < wallLimit)
   {
     robot.hard_turn = true;
   }
-  head.write(40);
-  delay(100);
-  rdiagonalscanval = watch();
-  Serial.print("rdiagonalscanval: ");
-  Serial.println(rdiagonalscanval);
-  if(rdiagonalscanval<distancelimit)
-  {
-    robot.turn_left = true;
-    robot.hard_turn = true; 
-    if(wallDirection == NONE)
-    {
-      wallDirection = RIGHT;
-    } 
-  }
-  head.write(0);
-  delay(100);
-  rightscanval = watch();
-  Serial.print("rightscanval: ");
-  Serial.println(rightscanval);
-  if(rightscanval<sidedistancelimit)
-  {
-    robot.turn_left = true;
-    if(wallDirection == NONE)
-    {
-      wallDirection = RIGHT;
-    }
+}
 
-  }
-  if(wallDirection==RIGHT) head.write(0);
-  else if (wallDirection == LEFT) head.write(180);
-  else head.write(90);
-  Serial.println("*******************************");
-  if(wallDirection == RIGHT) Serial.println("Wall direction Right");
-  else if (wallDirection == LEFT) Serial.println("Wall direction Left");
-  else if (wallDirection == NONE) Serial.println("Wall NOT FOUND");
-  Serial.print("Turn right = ");
-  Serial.println(robot.turn_right);
-  Serial.print("Turn left = ");
-  Serial.println(robot.turn_left);
-  Serial.print("Hard turn = ");
-  Serial.println(robot.hard_turn);
-  Serial.println("");
-  delay(100);
+void navigateCorner(int time)
+{
+  go_Forward(FAST_SPEED, 10);
+
+  while()
 }
 
 void contWallFollowing(int time)
 {
   int loops = 0;
-  int leftSpeed = SPEED;
-  int rightSpeed = SPEED;
   int offset;
   int distance;
-  while(loops<(time/10))
+  int prevDistance;
+  int rateOfChange;
+  int prevOffset = 0;
+  while(loops<(time/followingLoopInterval))
     {
-      // stop();
       distance = watch();
-      offset = ( - wallLimit)*3;
-      fitInt(&offset, 125);
+      rateOfChange = (offset - prevOffset);
+      offset = ((distance - wallLimit))*10;
+      rateOfChange = offset - prevOffset;
+      fitInt(&offset, 62);
       Serial.println(offset);
       Serial.print("Walldirection");
       Serial.println(wallDirection);
+      if(offset > 2* wallLimit)
+      {
+        //spin_degrees(wallDirection, 30);
+        corner(wallDirection);
+        delay(turntime);
+        head.write(90);
+        delay(300);
+        //go_Forward(255, turntime);
+        loops = time/followingLoopInterval;
+      }
       if (wallDirection == RIGHT)
       {
         set_Motorspeeds((125 + offset), (125 - offset));
@@ -293,7 +306,9 @@ void contWallFollowing(int time)
         set_Motorspeeds((125 - offset), (125 + offset));
 
       }
+      prevOffset = offset;
       delay(10);
+      loops++;
     }
 
 }
@@ -301,11 +316,16 @@ void contWallFollowing(int time)
 //Maintain distance from the identified wall
 void followWall()
 {
+  int wallDistance;
+  int wallChange;
+  if(wallDirection == RIGHT) wallDistance = rightscanval;
+  else if (wallDirection == LEFT) wallDistance = leftscanval;
+  wallChange = wallDistance - prevWallDistance; 
+  
   if (wallDirection == NONE)
   {
     //* go forward
-    go_Forward(SPEED);
-    delay(backtime);
+    go_Forward(SPEED, backtime);
     stop();
   }
   // else if (wallDirection == LEFT && leftscanval >= (wallLimit*1.3))
@@ -315,6 +335,13 @@ void followWall()
   //   delay(turntime);
   //   stop();
   // }
+  else if (wallDirection == LEFT && leftscanval >= wallLimit && wallChange > 30)
+  {
+    //turn left
+    turn(LEFT);
+    delay(turntime);
+    stop();
+  }
   else if (wallDirection == LEFT && leftscanval >= wallLimit)
   {
     //turn left
@@ -330,14 +357,14 @@ void followWall()
     stop();
 
   }
-  // else if (wallDirection == RIGHT && rightscanval >= (wallLimit*1.3))
-  // {
-  //   //turn right
-  //   corner(RIGHT);
-  //   delay(turntime);
-  //   stop();
-  // }
-  else if (wallDirection == RIGHT && rightscanval > (wallLimit))
+  else if (wallDirection == RIGHT && rightscanval > wallLimit)
+  {
+    //turn right
+    turn(RIGHT);
+    delay(turntime);
+    stop();
+  }
+  else if (wallDirection == RIGHT && wallChange > 30)
   {
     //turn right
     turn(RIGHT);
@@ -352,7 +379,7 @@ void followWall()
   }
   else
   {
-    go_Forward(SPEED);
+    go_Forward(SPEED, turntime);
   }
   stop();
 }
@@ -362,20 +389,15 @@ void auto_navigation(){
 
     //Adjust Course
     watchSurroundings();
-    // if (robot.turn_left && robot.turn_right && robot.hard_turn && (leftscanval < distancelimit || ldiagonalscanval < distancelimit))
-    // {
-    //   //backup right
-    //   reverse(RIGHT);
-    //   delay(backtime);
-    //   stop();
-    // }
-    // else if (robot.turn_left && robot.turn_right && robot.hard_turn)
-    // {
-    //   //backup left;
-    //   reverse(LEFT);
-    //   delay(backtime);
-    //   stop();
-    // }
+    chooseDirection();
+    if (robot.turn_left && robot.turn_right && robot.hard_turn )
+    {
+      if(wallDirection == RIGHT) spin(LEFT, TURN_SPEED);
+      else spin(RIGHT, TURN_SPEED);
+      delay(turntime/2);
+      stop();
+    }
+   
     if (robot.turn_right && robot.hard_turn)
     {
       //spin right
@@ -383,10 +405,16 @@ void auto_navigation(){
       delay(turntime);
       stop();
     }
+    else if(robot.turn_left && robot.hard_turn)
+    {
+      spin(LEFT, TURN_SPEED);
+      delay(turntime);
+      stop();
+    }
     else if (robot.hard_turn)
     {
-      // spin left
-      spin(LEFT, TURN_SPEED);
+      if(wallDirection == RIGHT) spin(LEFT, TURN_SPEED);
+      else spin(RIGHT, TURN_SPEED);
       delay(turntime);
       stop();
     }
@@ -407,8 +435,9 @@ void auto_navigation(){
     }
     else
     {
+      head.write(wallDirection*180);
       //follow wall
-      followWall();
+      contWallFollowing(turntime);
     } 
     stop();
 }
@@ -428,7 +457,7 @@ void setup() {
   /*init buzzer*/
   pinMode(BUZZ_PIN, OUTPUT);
   digitalWrite(BUZZ_PIN, HIGH);  
-  buzz_OFF(); 
+
 
   digitalWrite(Trig_PIN,LOW);
   /*init servo*/
@@ -437,7 +466,7 @@ void setup() {
    delay(2000);
   
   Serial.begin(9600);
- 
+ findWall();
  
 }
 void findPark(int time)
@@ -446,7 +475,6 @@ void findPark(int time)
   int leftSpeed = SPEED;
   int rightSpeed = SPEED;
   int offset;
-  int distance;
   int distance, prevDistance;
   int startTime, endTime;
   while(loops<(time/30))
@@ -478,9 +506,15 @@ void parallelPark()
 }
 
 void loop() {
+  // turn(RIGHT);
+  // delay(turntime);
+  // stop();
+  // delay(5000);
   //auto_navigation();
+  corner(LEFT);
+  // watchSurroundings();
+  // printScanValues();
+
   //parallelPark();
-  // wallDirection = RIGHT;
-  // head.write(0);
-  // contWallFollowing(500);
+  //wallDirection = RIGHT;
 }
