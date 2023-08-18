@@ -42,6 +42,8 @@ struct robot
   bool turn_left;
   bool turn_right;
   bool hard_turn; 
+  int turn_degrees;
+  bool parked;
 };
 
 robot robot;
@@ -66,11 +68,11 @@ robot robot;
 
 int leftscanval, centerscanval, rightscanval, ldiagonalscanval, rdiagonalscanval;
 const int distancelimit = 20; //distance limit for obstacles in front           
-const int sidedistancelimit = 20; //minimum distance in cm to obstacles at both sides (the car will allow a shorter distance sideways)
-const int wallLimit = 25;
+const int sidedistancelimit = 18; //minimum distance in cm to obstacles at both sides (the car will allow a shorter distance sideways)
+const int wallLimit = 23;
 int distance;
 int numcycles = 0;
-const int turntime = 250; //Time the robot spends turning (miliseconds)
+const int turntime = 200; //Time the robot spends turning (miliseconds)
 const int backtime = 300; //Time the robot spends moving (miliseconds)
 const int followingLoopInterval = 10;
 
@@ -91,6 +93,10 @@ void fitInt(int *integer, int fitValue )
 /*motor control*/
 void set_Motorspeeds(int speed_L,int speed_R)
 {
+  if(speed_L > 255) speed_L = 255;
+  else if (speed_L < -255) speed_L = -255;
+  if(speed_R > 255) speed_R = 255;
+  if(speed_R < -255) speed_R = -255;
   //If the right speed is positive, make motor go forward, else go backwards
   digitalWrite(RightDirectPin1, (speed_R > 0));
   digitalWrite(RightDirectPin2, (speed_R < 0));
@@ -121,6 +127,7 @@ void go_Forward(int speed, int duration)
 
 void spin(int direction, int speed)
 {
+
   if(direction==LEFT) set_Motorspeeds(-1*speed, speed*0.75);
 
   else if (direction==RIGHT) set_Motorspeeds(speed * 0.75, -1*speed);
@@ -134,8 +141,8 @@ void spin_degrees(int direction, int degrees)
 
 void corner(int direction)
 {
-  if (direction == LEFT) set_Motorspeeds(90, 250);
-  else if (direction == RIGHT) set_Motorspeeds(250, 90);
+  if (direction == LEFT) set_Motorspeeds(80, 250);
+  else if (direction == RIGHT) set_Motorspeeds(250, 80);
 }
 
 void cornerBack(int direction)
@@ -181,7 +188,8 @@ void printScanValues()
 }
 
 /*detection of ultrasonic distance: total delay of 20 microseconds*/
-long watch(){
+long watch()
+{
   long echo_distance = 0;
   int avg = 0;
   int count = 4;
@@ -260,13 +268,23 @@ void chooseDirection()
   {
     robot.hard_turn = true;
   }
+  if(scanValues[centerScan] < distancelimit)
+  {
+    robot.turn_degrees;
+  }
 }
 
 void navigateCorner(int time)
 {
   go_Forward(FAST_SPEED, 10);
-
-  while()
+  int distance = watch();
+  int startTime = millis();
+  int prevDistance = distance;
+  
+  while(distance < prevDistance && millis() - startTime < time - 10)
+  {
+    corner(wallDirection);
+  }
 }
 
 void contWallFollowing(int time)
@@ -281,22 +299,22 @@ void contWallFollowing(int time)
     {
       distance = watch();
       rateOfChange = (offset - prevOffset);
-      offset = ((distance - wallLimit))*10;
+      offset = ((distance - wallLimit))*5;
       rateOfChange = offset - prevOffset;
       fitInt(&offset, 62);
       Serial.println(offset);
       Serial.print("Walldirection");
       Serial.println(wallDirection);
-      if(offset > 2* wallLimit)
-      {
-        //spin_degrees(wallDirection, 30);
-        corner(wallDirection);
-        delay(turntime);
-        head.write(90);
-        delay(300);
-        //go_Forward(255, turntime);
-        loops = time/followingLoopInterval;
-      }
+      // if(distance - wallLimit > 2* wallLimit)
+      // {
+      //   //spin_degrees(wallDirection, 30);
+      //   // corner(wallDirection);
+      //   // delay(turntime);
+      //   relocateWall();
+        
+        
+      //   loops = time/followingLoopInterval;
+      // }
       if (wallDirection == RIGHT)
       {
         set_Motorspeeds((125 + offset), (125 - offset));
@@ -304,13 +322,45 @@ void contWallFollowing(int time)
       else if(wallDirection == LEFT)
       {
         set_Motorspeeds((125 - offset), (125 + offset));
-
       }
       prevOffset = offset;
       delay(10);
       loops++;
     }
 
+}
+
+void pidWallFollow(int duration)
+{
+  int error, prevError, errorDiff, errorSum;
+  int Kp = 2;
+  int Ki = 0.9;
+  int Kd = 0.8;
+  int pid;
+  int delayTime = 10;
+
+  int startTime = millis();
+
+  stop();
+  head.write(wallDirection*180);
+  delay(300);
+
+  while(millis() - startTime < duration)
+  {
+    error = fitInt(watch() - wallLimit);
+    errorSum += error;
+    errorDiff = error - prevError;
+    pid = Kp*error + Ki*errorSum + Kd* errorDiff;
+    if (wallDirection == RIGHT)
+    {
+      set_Motorspeeds((100 + pid), (100 - pid));
+    }
+    else if(wallDirection == LEFT)
+    {
+      set_Motorspeeds((100 - pid), (100 + pid));
+    }
+    delay(delayTime);
+  }
 }
 
 //Maintain distance from the identified wall
@@ -386,7 +436,6 @@ void followWall()
 
 //navigate through a room, finding and following a wall
 void auto_navigation(){
-
     //Adjust Course
     watchSurroundings();
     chooseDirection();
@@ -394,7 +443,7 @@ void auto_navigation(){
     {
       if(wallDirection == RIGHT) spin(LEFT, TURN_SPEED);
       else spin(RIGHT, TURN_SPEED);
-      delay(turntime/2);
+      delay(turntime);
       stop();
     }
    
@@ -442,6 +491,86 @@ void auto_navigation(){
     stop();
 }
 
+void relocateWall()
+{
+  head.write(wallDirection*180);
+  delay(500);
+  bool notFound = true;
+  int distance = watch();
+  int prevDistance = distance;
+  while (notFound)
+  {
+    distance = watch();
+    Serial.print("Distance: ");
+    Serial.println(distance);
+    Serial.print("Prevdistance: ");
+    Serial.println(prevDistance);
+    spin(wallDirection, 150);
+    if (distance - prevDistance > 0.2 * distance)
+    {
+      notFound = false;
+      stop();
+      delay(300);
+    }
+    prevDistance = distance;
+  }
+  stop();
+  delay(100);
+
+  if(distance > wallLimit + 6)
+  {
+    //turn(wallDirection);
+    delay(100);
+  }
+  else
+  {
+    //set_Motorspeeds(125, 125);
+    delay(100);
+  }
+}
+
+int findPark(int time)
+{
+  set_Motorspeeds(125, 120);
+  int distance, prevDistance;
+  int startTime = 0, endTime;
+  int state = 0;
+  distance = watch();
+  prevDistance = distance;
+  while(robot.parked == false)
+  {
+    distance = watch(); 
+    if(( distance - prevDistance > 55) && startTime != 0)
+    {
+      startTime = millis();
+    }
+    else if((prevDistance - distance > 20) && (millis()-startTime >500))
+    {
+      parallelPark();
+    }
+    delay(30);
+    prevDistance = distance;
+    
+  }
+}
+
+void parallelPark()
+{
+  stop();
+  delay(300);
+  set_Motorspeeds(-100, -100);
+  delay(30);
+  cornerBack(LEFT);
+  delay(500);
+  set_Motorspeeds(-200, -200);
+  delay(100);
+  cornerBack(RIGHT);
+  delay(740);
+  stop();
+  delay(3000);
+  robot.parked = true;
+}
+
 void setup() {
   /*setup L298N pin mode*/
   pinMode(RightDirectPin1, OUTPUT); 
@@ -458,6 +587,7 @@ void setup() {
   pinMode(BUZZ_PIN, OUTPUT);
   digitalWrite(BUZZ_PIN, HIGH);  
 
+  robot.parked = false;
 
   digitalWrite(Trig_PIN,LOW);
   /*init servo*/
@@ -466,55 +596,30 @@ void setup() {
    delay(2000);
   
   Serial.begin(9600);
- findWall();
+  findWall();
+  head.write(180);
+  delay(2000);
  
-}
-void findPark(int time)
-{
-  int loops = 0;
-  int leftSpeed = SPEED;
-  int rightSpeed = SPEED;
-  int offset;
-  int distance, prevDistance;
-  int startTime, endTime;
-  while(loops<(time/30))
-  {
-    distance = watch(); 
-    if((distance - prevDistance) > 55)
-    {
-      startTime = millis();
-    }
-    else if(((prevDistance - distance) > 55) && ((millis()-startTime) >500))
-    {
-      parallelPark();
-    }
-    delay(30);
-    prevDistance = distance;
-  }
+ wallDirection = RIGHT;
+ head.write(wallDirection * 180); 
+ delay(1000);
 }
 
-void parallelPark()
-{
-  cornerBack(LEFT);
-  delay(500);
-  set_Motorspeeds(-200, -200);
-  delay(500);
-  cornerBack(RIGHT);
-  delay(600);
-  stop();
-  delay(3000);
-}
 
 void loop() {
-  // turn(RIGHT);
-  // delay(turntime);
-  // stop();
-  // delay(5000);
+  // spin(LEFT, 255);
+  wallDirection = RIGHT;
+  // contWallFollowing(100);
+  pidWallFollow(10000);
+  
+  //set_Motorspeeds(130, -130*0.75);
   //auto_navigation();
-  corner(LEFT);
-  // watchSurroundings();
+  //watchSurroundings();
   // printScanValues();
-
+  // while(robot.parked == false)
+  // {
+  //   findPark(300);
+  // }
   //parallelPark();
   //wallDirection = RIGHT;
 }
